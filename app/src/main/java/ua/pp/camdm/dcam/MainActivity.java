@@ -3,17 +3,22 @@ package ua.pp.camdm.dcam;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.app.PictureInPictureParams;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.util.Rational;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
 import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
@@ -191,7 +196,41 @@ public class MainActivity extends Activity {
             }
         });
 
+        webView.addJavascriptInterface(new AndroidBridge(), "AndroidApp");
         webView.loadUrl(PRIMARY_URL);
+    }
+
+    private class AndroidBridge {
+        @JavascriptInterface
+        public void enterPiP() {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    PictureInPictureParams params = new PictureInPictureParams.Builder()
+                            .setAspectRatio(new Rational(16, 9))
+                            .build();
+                    enterPictureInPictureMode(params);
+                } else {
+                    Toast.makeText(
+                            MainActivity.this,
+                            "PiP требует Android 8.0 или выше",
+                            Toast.LENGTH_SHORT
+                    ).show();
+                }
+            });
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(
+            boolean isInPictureInPictureMode, Configuration newConfig
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        if (webView != null) {
+            webView.evaluateJavascript(
+                    "document.body.classList.toggle('in-pip'," + isInPictureInPictureMode + ");",
+                    null
+            );
+        }
     }
 
     @Override
