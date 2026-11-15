@@ -1,6 +1,7 @@
 package ua.pp.camdm.dcam;
 
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.app.PictureInPictureParams;
@@ -27,7 +28,11 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.view.Gravity;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
@@ -39,13 +44,15 @@ public class MainActivity extends Activity {
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
     private boolean fallbackUsed = false;
+    private boolean liveActive = false;
+    private boolean webViewPaused = false;
+    private boolean mainFrameFailed = false;
+    private LinearLayout offlineView;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
         rootLayout = new FrameLayout(this);
         rootLayout.setBackgroundColor(Color.parseColor("#06080D"));
 
@@ -53,6 +60,14 @@ public class MainActivity extends Activity {
         webView.setBackgroundColor(Color.parseColor("#06080D"));
         rootLayout.addView(
                 webView,
+                new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                )
+        );
+        offlineView = buildOfflineView();
+        rootLayout.addView(
+                offlineView,
                 new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -89,20 +104,32 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                mainFrameFailed = false;
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 CookieManager.getInstance().flush();
+                if (!mainFrameFailed) {
+                    hideOffline();
+                }
             }
 
             @Override
             public void onReceivedError(
                     WebView view, WebResourceRequest request, WebResourceError error
             ) {
-                if (request.isForMainFrame()
-                        && !fallbackUsed
-                        && request.getUrl().toString().startsWith(PRIMARY_URL)) {
+                if (!request.isForMainFrame()) {
+                    return;
+                }
+                mainFrameFailed = true;
+                if (!fallbackUsed && request.getUrl().toString().startsWith(PRIMARY_URL)) {
                     fallbackUsed = true;
                     view.loadUrl(FALLBACK_URL);
+                    return;
                 }
+                showOffline();
             }
 
             @Override
@@ -114,6 +141,9 @@ public class MainActivity extends Activity {
                 if (!fallbackUsed && failedUrl.startsWith(PRIMARY_URL)) {
                     fallbackUsed = true;
                     view.loadUrl(FALLBACK_URL);
+                } else {
+                    mainFrameFailed = true;
+                    showOffline();
                 }
             }
         });
@@ -200,15 +230,128 @@ public class MainActivity extends Activity {
         webView.loadUrl(PRIMARY_URL);
     }
 
+    private LinearLayout buildOfflineView() {
+        float d = getResources().getDisplayMetrics().density;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setBackgroundColor(Color.parseColor("#06080D"));
+        box.setPadding((int) (24 * d), 0, (int) (24 * d), 0);
+        box.setClickable(true);
+
+        TextView title = new TextView(this);
+        title.setText("Нет связи");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(22);
+        title.setGravity(Gravity.CENTER);
+        box.addView(title);
+
+        TextView sub = new TextView(this);
+        sub.setText("Проверьте интернет и попробуйте ещё раз.");
+        sub.setTextColor(Color.parseColor("#9AA4B2"));
+        sub.setTextSize(15);
+        sub.setGravity(Gravity.CENTER);
+        sub.setPadding(0, (int) (8 * d), 0, (int) (20 * d));
+        box.addView(sub);
+
+        Button retry = new Button(this);
+        retry.setText("Повторить");
+        retry.setAllCaps(false);
+        retry.setOnClickListener(v -> retryLoad());
+        box.addView(retry);
+
+        box.setVisibility(View.GONE);
+        return box;
+    }
+
+    private void showOffline() {
+        webView.setVisibility(View.INVISIBLE);
+        offlineView.setVisibility(View.VISIBLE);
+        setLiveActive(false);
+    }
+
+    private void hideOffline() {
+        offlineView.setVisibility(View.GONE);
+        if (customView == null) {
+            webView.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void retryLoad() {
+        fallbackUsed = false;
+        mainFrameFailed = false;
+        offlineView.setVisibility(View.GONE);
+        webView.setVisibility(View.VISIBLE);
+        webView.loadUrl(PRIMARY_URL);
+    }
+
+    private void setLiveActive(boolean live) {
+        liveActive = live;
+        if (live) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                setPictureInPictureParams(buildPipParams());
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    @TargetApi(Build.VERSION_CODES.O)
+    private PictureInPictureParams buildPipParams() {
+        PictureInPictureParams.Builder b = new PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(4, 3));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            b.setAutoEnterEnabled(liveActive);
+            b.setSeamlessResizeEnabled(false);
+        }
+        return b.build();
+    }
+
+    private void enterPipNow() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return;
+        }
+        try {
+            enterPictureInPictureMode(buildPipParams());
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean inPip() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
+    }
+
+    private void pauseWebView() {
+        if (webView != null && !webViewPaused) {
+            webView.onPause();
+            webView.pauseTimers();
+            webViewPaused = true;
+        }
+    }
+
+    private void resumeWebView() {
+        if (webView != null && webViewPaused) {
+            webView.resumeTimers();
+            webView.onResume();
+            webViewPaused = false;
+        }
+    }
+
     private class AndroidBridge {
+        @JavascriptInterface
+        public void setLive(boolean live) {
+            runOnUiThread(() -> setLiveActive(live));
+        }
+
         @JavascriptInterface
         public void enterPiP() {
             runOnUiThread(() -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    PictureInPictureParams params = new PictureInPictureParams.Builder()
-                            .setAspectRatio(new Rational(16, 9))
-                            .build();
-                    enterPictureInPictureMode(params);
+                    enterPipNow();
                 } else {
                     Toast.makeText(
                             MainActivity.this,
@@ -234,9 +377,45 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        // Android 12+ enters PiP automatically via setAutoEnterEnabled.
+        if (liveActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            enterPipNow();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        resumeWebView();
+    }
+
+    @Override
     protected void onPause() {
         CookieManager.getInstance().flush();
         super.onPause();
+        if (!inPip()) {
+            pauseWebView();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // PiP window was closed or the app went to background: stop video and timers.
+        pauseWebView();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        resumeWebView();
+    }
+
+    private void defaultBack() {
+        super.onBackPressed();
     }
 
     @Override
@@ -245,10 +424,23 @@ public class MainActivity extends Activity {
             webView.getWebChromeClient().onHideCustomView();
             return;
         }
-        if (webView.canGoBack()) {
-            webView.goBack();
+        if (offlineView.getVisibility() == View.VISIBLE) {
+            super.onBackPressed();
             return;
         }
-        super.onBackPressed();
+        webView.evaluateJavascript(
+                "(function(){try{return !!(window.dcamAndroidBack && window.dcamAndroidBack());}"
+                        + "catch(e){return false;}})()",
+                handled -> {
+                    if ("true".equals(handled)) {
+                        return;
+                    }
+                    if (webView.canGoBack()) {
+                        webView.goBack();
+                    } else {
+                        defaultBack();
+                    }
+                }
+        );
     }
 }
